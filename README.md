@@ -1,0 +1,1 @@
+See https://github.com/alexeden/rpi-led-matrix/tree/master/src for a good example of a real module using NAPI

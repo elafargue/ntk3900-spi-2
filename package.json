@@ -1,0 +1,24 @@
+{
+  "main": "lib/binding.js",
+  "dependencies": {
+    "bindings": "~1.2.1",
+    "node-addon-api": "^1.0.0"
+  },
+  "scripts": {
+    "test": "node --napi-modules ./test/test_binding.js"
+  },
+  "gypfile": true,
+  "name": "ntk3900-spi2",
+  "version": "1.0.0",
+  "description": "SPI module with Noritake VFD extensions",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elafargue/ntk3900-spi.git"
+  },
+  "author": "Ed Lafargue",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/elafargue/ntk3900-spi/issues"
+  },
+  "homepage": "https://github.com/elafargue/ntk3900-spi#readme"
+}
