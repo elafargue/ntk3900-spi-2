@@ -24,16 +24,30 @@
 
 class SPIDriver : public Napi::ObjectWrap<SPIDriver> {
     public:
-        static Napi::Object Init(Napi::Env env, Napi::Object exports);
         SPIDriver(const Napi::CallbackInfo& info);
+        static Napi::Object Init(Napi::Env env, Napi::Object exports);
         ~SPIDriver();
 
         Napi::Value open(const Napi::CallbackInfo& info);
         Napi::Value close(const Napi::CallbackInfo& info);
         Napi::Value transfer(const Napi::CallbackInfo& info);
+        Napi::Value mode(const Napi::CallbackInfo& info);
+        Napi::Value chipSelect(const Napi::CallbackInfo& info);
+        Napi::Value bitsPerWord(const Napi::CallbackInfo& info);
+        Napi::Value maxSpeed(const Napi::CallbackInfo& info);
+        Napi::Value wrPin(const Napi::CallbackInfo& info);
+        Napi::Value rdyPin(const Napi::CallbackInfo& info);
+        Napi::Value invertRdy(const Napi::CallbackInfo& info);
+        Napi::Value bSeries(const Napi::CallbackInfo& info);
+        Napi::Value delay(const Napi::CallbackInfo& info);
+        Napi::Value loopback(const Napi::CallbackInfo& info);
+        Napi::Value bitOrder(const Napi::CallbackInfo& info);
+        Napi::Value halfDuplex(const Napi::CallbackInfo& info);
 
     private:
         static Napi::FunctionReference constructor;
+        void full_duplex_transfer(const Napi::CallbackInfo& info, unsigned char *write, unsigned char *read, size_t length, uint32_t speed, uint16_t delay, uint8_t bits);
+
         int m_fd;
         uint32_t m_mode;
         uint32_t m_max_speed;
@@ -46,7 +60,11 @@ class SPIDriver : public Napi::ObjectWrap<SPIDriver> {
 
 };
 
-#define EXCEPTION(MESSAGE) Napi::TypeError::New(info.Env(), "MESSAGE").ThrowAsJavaScriptException();
+#define EXCEPTION(MESSAGE) Napi::TypeError::New(info.Env(), #MESSAGE).ThrowAsJavaScriptException();
+
+#define ASSERT_OPEN if (this->m_fd == -1) { EXCEPTION("Device not opened"); } 
+#define ASSERT_NOT_OPEN if (this->m_fd != -1) { EXCEPTION("Cannot be called once device is opened"); }
+
 
 // Macro to define a named property via n-api
 #define NODE_SET_PROPERTY(exports, PROP) status = napi_create_int32(env, PROP, &value); \
