@@ -47,6 +47,7 @@ Napi::Object SPIDriver::Init(Napi::Env env, Napi::Object exports) {
             InstanceMethod("open", &SPIDriver::open),
             InstanceMethod("close", &SPIDriver::close),
             InstanceMethod("transfer", &SPIDriver::transfer),
+            InstanceMethod("dmaTransfer", &SPIDriver::dmaTransfer),
             InstanceMethod("mode", &SPIDriver::mode),
             InstanceMethod("chipSelect", &SPIDriver::chipSelect),
             InstanceMethod("bitsPerWord", &SPIDriver::bitsPerWord),
@@ -177,10 +178,30 @@ Napi::Value SPIDriver::close(const Napi::CallbackInfo& info) {
 }
 
 /**
- * The most important entry point, that receives the data to transfer.
- * Arg 1 and 2 are Buffers (and supposed to be the same size)
+ * Standard SPI transfer entry point, that receives the data to transfer.
+ * Arg 1 and 2 are Buffers (and supposed to be the same size).
  */
 Napi::Value SPIDriver::transfer(const Napi::CallbackInfo& info) {
+    ASSERT_OPEN;
+
+    this->do_transfer(info, false);
+
+    return info.This();
+}
+
+Napi::Value SPIDriver::dmaTransfer(const Napi::CallbackInfo& info) {
+    ASSERT_OPEN;
+
+    this->do_transfer(info, true);
+
+    return info.This();
+}
+
+
+/**
+ * Executes the transfer in dma or standard mode
+ */
+void SPIDriver::do_transfer(const Napi::CallbackInfo& info, bool dma) {
     ASSERT_OPEN;
 
     if (info.Length() != 2 )
@@ -212,11 +233,10 @@ Napi::Value SPIDriver::transfer(const Napi::CallbackInfo& info) {
     }
 
     this->full_duplex_transfer(info, write_buffer, read_buffer,
-                                 MAX(write_length, read_length),
-                                 this->m_max_speed, this->m_delay, this->m_bits_per_word);
-
-    return info.This();
+                                MAX(write_length, read_length),
+                                this->m_max_speed, this->m_delay, this->m_bits_per_word, dma);
 }
+
 
 void SPIDriver::full_duplex_transfer(
                 const Napi::CallbackInfo& info,
@@ -225,7 +245,8 @@ void SPIDriver::full_duplex_transfer(
                 size_t length,
                 uint32_t speed,
                 uint16_t delay,
-                uint8_t bits ) {
+                uint8_t bits,
+                bool dma ) {
 
     struct spi_ioc_transfer data = {
 	    (unsigned long)write,
@@ -241,7 +262,6 @@ void SPIDriver::full_duplex_transfer(
     };
 
     int ret =0;
-
     GPIO_SET = 1 << this->m_wr_pin;
 
     // Don't write anything if the peripheral is not ready
@@ -251,7 +271,7 @@ void SPIDriver::full_duplex_transfer(
         while(!GET_GPIO(this->m_rdy_pin)){};
     }
 
-      // Now send byte by byte for the whole buffer
+    // Now send byte by byte for the whole buffer
     while (length--) {
         ret = ioctl(this->m_fd, SPI_IOC_MESSAGE(1), &data);
 
@@ -266,13 +286,12 @@ void SPIDriver::full_duplex_transfer(
             // works well in practice.
             delayMicrosecondsHard(10); 
             while(GET_GPIO(this->m_rdy_pin)){};
-        } else {
+        } else if (!dma) {
             // The RDY line can take up to 500ns to do down,
             // so we need to wait before reading it:
             delayMicrosecondsHard(1); 
             while(!GET_GPIO(this->m_rdy_pin)){};
         }
-        //delayMicrosecondsHard(15);
     
         data.tx_buf++;
    }

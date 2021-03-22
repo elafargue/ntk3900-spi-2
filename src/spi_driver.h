@@ -31,6 +31,7 @@ class SPIDriver : public Napi::ObjectWrap<SPIDriver> {
         Napi::Value open(const Napi::CallbackInfo& info);
         Napi::Value close(const Napi::CallbackInfo& info);
         Napi::Value transfer(const Napi::CallbackInfo& info);
+        Napi::Value dmaTransfer(const Napi::CallbackInfo& info);
         Napi::Value mode(const Napi::CallbackInfo& info);
         Napi::Value chipSelect(const Napi::CallbackInfo& info);
         Napi::Value bitsPerWord(const Napi::CallbackInfo& info);
@@ -46,7 +47,9 @@ class SPIDriver : public Napi::ObjectWrap<SPIDriver> {
 
     private:
         static Napi::FunctionReference constructor;
-        void full_duplex_transfer(const Napi::CallbackInfo& info, unsigned char *write, unsigned char *read, size_t length, uint32_t speed, uint16_t delay, uint8_t bits);
+        void full_duplex_transfer(const Napi::CallbackInfo& info, unsigned char *write, unsigned char *read, size_t length, uint32_t speed, uint16_t delay, uint8_t bits, bool dma);
+        void dma_transfer(const Napi::CallbackInfo& info, unsigned char *write, unsigned char *read, size_t length, uint32_t speed, uint16_t delay, uint8_t bits);
+        void do_transfer(const Napi::CallbackInfo& info, bool dma);
 
         int m_fd;
         uint32_t m_mode;
@@ -70,14 +73,6 @@ class SPIDriver : public Napi::ObjectWrap<SPIDriver> {
 #define NODE_SET_PROPERTY(exports, PROP) status = napi_create_int32(env, PROP, &value); \
     if (status != napi_ok) return exports; \
     status = napi_set_named_property(env, exports, #PROP, value);
-
-// #define NODE_SET_PROPERTY(PROP)  status = napi_create_object(env, &obj); \
-//     if (status != napi_ok) return exports; \
-//     \
-//     status = napi_create_int32(env, PROP, &value); \
-//     if (status != napi_ok) return exports; \
-//     status = napi_set_named_property(env, obj, #PROP, value);
-
 
 #define SET_IOCTL_VALUE(FD, CTRL, VALUE)                                       \
   retval = ioctl(FD, CTRL, &(VALUE));                                          \
