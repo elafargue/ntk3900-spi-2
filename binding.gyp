@@ -3,7 +3,8 @@
     {
       'target_name': '_spi',
       'sources': [ 'src/ntk3900_spi2.cc',
-                   'src/spi_driver.cc' ],
+                   'src/spi_driver.cc',
+                   'src/bcm2835.c' ],
       'include_dirs': ["<!@(node -p \"require('node-addon-api').include\")"],
       'dependencies': ["<!(node -p \"require('node-addon-api').gyp\")"],
       'cflags!': [ '-fno-exceptions' ],

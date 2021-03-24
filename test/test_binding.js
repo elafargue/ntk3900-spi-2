@@ -22,6 +22,12 @@ function testConstants() {
 
     assert.notStrictEqual(spi.ORDER.lsb, undefined, "ORDER.lsb missing");
     assert.notStrictEqual(spi.ORDER.msb, undefined, "ORDER.msb missing");
+
+    assert.notStrictEqual(spi.DRIVER.SPIDEV, undefined, "DRIVER.SPIDEV missing");
+    console.log("DRIVER.SPIDEV:", spi.DRIVER.SPIDEV);
+    assert.notStrictEqual(spi.DRIVER.BCM2835, undefined, "DRIVER.BMC2835 missing");
+    console.log("DRIVER.BCM2835:", spi.DRIVER.BCM2835);
+
 }
 
 function testCreate()
@@ -85,12 +91,19 @@ function testCreate()
     val = instance.bSeries();
     assert.strictEqual(val, true, "Could not switch bSeries to true as expected");
 
-    console.log("Testing Spi.delay()");
+    console.log("Testing Spi.spiDelay()");
     val = instance.delay();
     assert.strictEqual(val, 0, "Default delay is not 0 as expected");
     instance.delay(100);
     val = instance.delay();
     assert.strictEqual(val, 100, "Could not switch delay to 100 as expected");
+
+    console.log("Testing Spi.driver()");
+    val = instance.driver();
+    assert.strictEqual(val, spi.DRIVER.SPIDEV, "Default driver is not SPIDEV as expected");
+    instance.driver(spi.DRIVER.BCM2835);
+    val = instance.driver();
+    assert.strictEqual(val, spi.DRIVER.BCM2835, "Could not switch driver to BCM2835 as expected");
 
     console.log("Testing Spi.loopback()");
     val = instance.loopback();
@@ -121,13 +134,26 @@ function illegalMode() {
     instance.mode(99);
 }
 
+function testBCM2835()
+{
+    const instance =  new spi.Spi("/dev/spi0.0");
+    assert.notStrictEqual(instance._spi, undefined, "Spi new failed");
+
+    instance.driver(spi.DRIVER.BCM2835);
+
+    instance.open();
+
+}
+
 
 console.log("Constants");
 assert.doesNotThrow(testConstants, undefined, "Test constants are defined");
 console.log("Create instance, test functions")
-assert.doesNotThrow(testCreate, undefined, "testCreate threw an expection");
+assert.doesNotThrow(testCreate, undefined, "testCreate threw an exception");
 console.log("Check that illegal SPI modes are rejected");
-assert.throws(illegalMode, undefined, "testCreate threw an expection");
+assert.throws(illegalMode, undefined, "testCreate threw an exception");
+//console.log("Check the Linux BCM2835 driver works");
+//assert.doesNotThrow(testBCM2835, undefined, "testBMC2835 threw an exception");
 
 
 console.log("Tests passed- everything looks OK!");
