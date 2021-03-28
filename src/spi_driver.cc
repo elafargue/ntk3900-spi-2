@@ -304,12 +304,15 @@ void SPIDriver::open_bcm2835(const Napi::CallbackInfo& info, const char * device
     }
 
     bcm2835_spi_set_speed_hz(this->m_max_speed);
-    if (! strcmp(device, "/dev/spidev0.0"))
+    if (! strcmp(device, "/dev/spidev0.0")) {
         bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
-    else
+        bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
+        this->m_fd = 0; // We use m_fd to remember what CS line is used
+    } else {
         bcm2835_spi_chipSelect(BCM2835_SPI_CS1);
-
-    bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
+        bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS1, LOW);
+        this->m_fd = 1;
+    }
 
     // Now setup the GPIOs that are specific to the Noritake screens
 
@@ -321,7 +324,6 @@ void SPIDriver::open_bcm2835(const Napi::CallbackInfo& info, const char * device
         bcm2835_gpio_set_pud(this->m_rdy_pin, BCM2835_GPIO_PUD_UP);
     }
 
-    this->m_fd = 0; // Arbitrary to avoid the ASSERT_OPEN fails
 
 }
 
@@ -400,8 +402,18 @@ void SPIDriver::bcm2835_transfer(
 
     int ret =0;
 
-    // GPIO_SET = 1 << this->m_wr_pin;
-    bcm2835_gpio_write(this->m_wr_pin,HIGH);
+    // Since we can have multiple instances of SPI, we have to reset
+    // the peripheral before each transfer since they can all have different
+    // speed values and CS line selection
+    bcm2835_spi_set_speed_hz(speed);
+    if (this->m_fd) {
+        bcm2835_spi_chipSelect(BCM2835_SPI_CS1);
+    } else {
+        bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
+    }
+
+    if (this->m_wr_pin)
+        bcm2835_gpio_write(this->m_wr_pin,HIGH);
 
     // Don't write anything if the peripheral is not ready
     if (this->m_invert_rdy) {
@@ -410,7 +422,9 @@ void SPIDriver::bcm2835_transfer(
         while(! bcm2835_gpio_lev(this->m_rdy_pin)) {};
     }
 
-    // Now send byte by byte for the whole buffer
+    // Now send byte by byte for the whole buffer and check
+    // the busy/ready signal at each byte if necessary, and also
+    // toggle the !WRITE signal if necessary
     while (length--) {
         if (this->m_wr_pin) {
             bcm2835_gpio_clr(this->m_wr_pin);
