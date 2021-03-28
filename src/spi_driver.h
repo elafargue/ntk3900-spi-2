@@ -2,7 +2,8 @@
 
 #include <napi.h>
 
-// using namespace spi_driver;
+#define DRIVER_SPIDEV 0
+#define DRIVER_BCM2835 1
 
 #define BCM2708_PERI_BASE        0x3F000000
 #define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO controller */
@@ -40,15 +41,18 @@ class SPIDriver : public Napi::ObjectWrap<SPIDriver> {
         Napi::Value rdyPin(const Napi::CallbackInfo& info);
         Napi::Value invertRdy(const Napi::CallbackInfo& info);
         Napi::Value bSeries(const Napi::CallbackInfo& info);
-        Napi::Value delay(const Napi::CallbackInfo& info);
+        Napi::Value spiDelay(const Napi::CallbackInfo& info);
         Napi::Value loopback(const Napi::CallbackInfo& info);
         Napi::Value bitOrder(const Napi::CallbackInfo& info);
         Napi::Value halfDuplex(const Napi::CallbackInfo& info);
+        Napi::Value driver(const Napi::CallbackInfo& info);
 
     private:
         static Napi::FunctionReference constructor;
-        void full_duplex_transfer(const Napi::CallbackInfo& info, unsigned char *write, unsigned char *read, size_t length, uint32_t speed, uint16_t delay, uint8_t bits, bool dma);
-        void dma_transfer(const Napi::CallbackInfo& info, unsigned char *write, unsigned char *read, size_t length, uint32_t speed, uint16_t delay, uint8_t bits);
+        void open_spidev(const Napi::CallbackInfo& info, const char * device);
+        void open_bcm2835(const Napi::CallbackInfo& info, const char * device);
+        void spidev_transfer(const Napi::CallbackInfo& info, unsigned char *write, unsigned char *read, size_t length, uint32_t speed, uint16_t delay, uint8_t bits, bool dma);
+        void bcm2835_transfer(const Napi::CallbackInfo& info, unsigned char *write, unsigned char *read, size_t length, uint32_t speed, uint16_t delay, uint8_t bits, bool dma);
         void do_transfer(const Napi::CallbackInfo& info, bool dma);
 
         int m_fd;
@@ -58,6 +62,7 @@ class SPIDriver : public Napi::ObjectWrap<SPIDriver> {
         uint8_t m_bits_per_word;
         uint32_t m_wr_pin;
         uint32_t m_rdy_pin;
+        uint8_t m_driver;
         bool m_bseries;
         bool m_invert_rdy;
 

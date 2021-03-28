@@ -2,6 +2,7 @@
 #ifdef __linux__
   #include <sys/ioctl.h>
   #include <linux/spi/spidev.h>
+  #include "bcm2835.h"
 #else
   #include "fake_spi.h"
 #endif
@@ -20,7 +21,7 @@ void *gpio_map;
 
 // using namespace spi_driver;
 
-  void delayMicrosecondsHard (unsigned int howLong)
+void delayMicrosecondsHard (unsigned int howLong)
  {
    struct timeval tNow, tLong, tEnd ;
  
@@ -48,6 +49,7 @@ Napi::Object SPIDriver::Init(Napi::Env env, Napi::Object exports) {
             InstanceMethod("close", &SPIDriver::close),
             InstanceMethod("transfer", &SPIDriver::transfer),
             InstanceMethod("dmaTransfer", &SPIDriver::dmaTransfer),
+            InstanceMethod("driver", &SPIDriver::driver),
             InstanceMethod("mode", &SPIDriver::mode),
             InstanceMethod("chipSelect", &SPIDriver::chipSelect),
             InstanceMethod("bitsPerWord", &SPIDriver::bitsPerWord),
@@ -56,7 +58,7 @@ Napi::Object SPIDriver::Init(Napi::Env env, Napi::Object exports) {
             InstanceMethod("rdyPin", &SPIDriver::rdyPin),
             InstanceMethod("invertRdy", &SPIDriver::invertRdy),
             InstanceMethod("bSeries", &SPIDriver::bSeries),
-            InstanceMethod("delay", &SPIDriver::delay),
+            InstanceMethod("delay", &SPIDriver::spiDelay),
             InstanceMethod("loopback", &SPIDriver::loopback),
             InstanceMethod("bitOrder", &SPIDriver::bitOrder),
             InstanceMethod("halfDuplex", &SPIDriver::halfDuplex),
@@ -69,6 +71,13 @@ Napi::Object SPIDriver::Init(Napi::Env env, Napi::Object exports) {
     NODE_SET_PROPERTY(exports, SPI_MODE_1)
     NODE_SET_PROPERTY(exports, SPI_MODE_2)
     NODE_SET_PROPERTY(exports, SPI_MODE_3)
+
+    // This module supports either spidev - good but slow, or very very slow for
+    // short transfers, and low level bcm2835 library, which is very fast and
+    // a bit more dangerous since it bypasses the Linux bcm-2835 driver and talks
+    // to the chip directly.
+    NODE_SET_PROPERTY(exports, DRIVER_SPIDEV)
+    NODE_SET_PROPERTY(exports, DRIVER_BCM2835)
 
 #define SPI_CS_LOW 0  // This doesn't exist normally
     NODE_SET_PROPERTY(exports, SPI_NO_CS)
@@ -96,6 +105,7 @@ SPIDriver::SPIDriver(const Napi::CallbackInfo& info)
     m_bits_per_word(8),    // default bits per word
     m_wr_pin(0),
     m_rdy_pin(0),
+    m_driver(DRIVER_SPIDEV),
     m_bseries(false),
     m_invert_rdy(false)  // RDY is RDY, not BUSY
     {
@@ -108,63 +118,20 @@ SPIDriver::~SPIDriver(void) {
 
 // Open expects a device passed as part of the info
 Napi::Value SPIDriver::open(const Napi::CallbackInfo& info) {
-    int retval = 0;
 
     if (!info[0].IsString()) {
-        EXCEPTION("Wrong arguments - gabuzo")
+        EXCEPTION("Wrong arguments")
     }
     ASSERT_NOT_OPEN;
 
     std::string dev = info[0].As<Napi::String>().Utf8Value();
     const char * device = dev.c_str();
-    this->m_fd = ::open(device, O_RDWR); // Blocking!
-    if (this->m_fd < 0) {
-        EXCEPTION("Unable to open device");
+
+    if (this->m_driver == DRIVER_SPIDEV) {
+        open_spidev(info, device);
+    } else {
+        open_bcm2835(info, device);
     }
-
-    SET_IOCTL_VALUE(this->m_fd, SPI_IOC_WR_MODE, this->m_mode);
-    SET_IOCTL_VALUE(this->m_fd, SPI_IOC_WR_BITS_PER_WORD, this->m_bits_per_word);
-    SET_IOCTL_VALUE(this->m_fd, SPI_IOC_WR_MAX_SPEED_HZ, this->m_max_speed);
-
-    // Setup the GPIO pin as well
-    int mem_fd;
-    /* open /dev/mem */
-    if ((mem_fd = ::open("/dev/mem", O_RDWR|O_SYNC) ) < 0) {
-        EXCEPTION("can't open /dev/mem");
-    }
-    
-    /* mmap GPIO */
-    gpio_map = mmap(
-        NULL,             //Any adddress in our space will do
-        BLOCK_SIZE,       //Map length
-        PROT_READ|PROT_WRITE,// Enable reading & writting to mapped memory
-        MAP_SHARED,       //Shared with other processes
-        mem_fd,           //File to map
-        GPIO_BASE         //Offset to GPIO peripheral
-    );
-    
-    ::close(mem_fd); //No need to keep mem_fd open after mmap
-    
-    if (gpio_map == MAP_FAILED) {
-        EXCEPTION("mmap error"); //errno also set!
-    }
-
-    printf("Ready pin: %u", this->m_rdy_pin);
-    
-    // Always use volatile pointer!
-    gpio = (volatile unsigned *)gpio_map;
-
-    INP_GPIO(this->m_wr_pin);
-    OUT_GPIO(this->m_wr_pin);
-
-    INP_GPIO(this->m_rdy_pin);
-    // Enable pulldown on Ready pin:
-    GPIO_PULL = 1;
-    delayMicrosecondsHard(5);
-    GPIO_PULLCLK0 = 1 << this->m_rdy_pin;
-    delayMicrosecondsHard(5);
-    GPIO_PULL = 0;
-    GPIO_PULLCLK0 = 0;
 
     return info.This();
 
@@ -204,16 +171,16 @@ Napi::Value SPIDriver::dmaTransfer(const Napi::CallbackInfo& info) {
 void SPIDriver::do_transfer(const Napi::CallbackInfo& info, bool dma) {
     ASSERT_OPEN;
 
-    if (info.Length() != 2 )
-        EXCEPTION("Need two Buffer arguments");
+    if (!(info.Length() >= 1) )
+        EXCEPTION("Need at least one Buffer argument");
 
     if (info[0].IsNull() && info[1].IsNull())
         EXCEPTION("Both buffers cannot be null");
 
     unsigned char *write_buffer = NULL;
     unsigned char *read_buffer = NULL;
-    size_t write_length = -1;
-    size_t read_length = -1;
+    size_t write_length = 0;
+    size_t read_length = 0;
 
     // Setup the pointer to the data in both buffers
     if (info[0].IsBuffer()) {
@@ -232,34 +199,146 @@ void SPIDriver::do_transfer(const Napi::CallbackInfo& info, bool dma) {
          EXCEPTION("Read and write buffers MUST be the same length");
     }
 
-    this->full_duplex_transfer(info, write_buffer, read_buffer,
-                                MAX(write_length, read_length),
-                                this->m_max_speed, this->m_delay, this->m_bits_per_word, dma);
+    if (this->m_driver == DRIVER_SPIDEV) {
+        this->spidev_transfer(info, write_buffer, read_buffer,
+                                    MAX(write_length, read_length),
+                                    this->m_max_speed, this->m_delay, this->m_bits_per_word, dma);
+    } else {
+        this->bcm2835_transfer(info, write_buffer, read_buffer,
+                                    MAX(write_length, read_length),
+                                    this->m_max_speed, this->m_delay, this->m_bits_per_word, dma);
+    }
 }
 
+/**
+ * Opens a SPI peripheral using the Linux spidev interface (/dev/spiX.Y) 
+ */
+void SPIDriver::open_spidev(const Napi::CallbackInfo& info, const char * device) {
+    int retval = 0;
 
-void SPIDriver::full_duplex_transfer(
+    this->m_fd = ::open(device, O_RDWR); // Blocking!
+    if (this->m_fd < 0) {
+        EXCEPTION("Unable to open device");
+    }
+
+    SET_IOCTL_VALUE(this->m_fd, SPI_IOC_WR_MODE, this->m_mode);
+    SET_IOCTL_VALUE(this->m_fd, SPI_IOC_WR_BITS_PER_WORD, this->m_bits_per_word);
+    SET_IOCTL_VALUE(this->m_fd, SPI_IOC_WR_MAX_SPEED_HZ, this->m_max_speed);
+
+    // Setup the GPIO pin as well
+    int mem_fd;
+    /* open /dev/mem */
+    if ((mem_fd = ::open("/dev/mem", O_RDWR|O_SYNC) ) < 0) {
+        EXCEPTION("can't open /dev/mem");
+    }
+    
+    /* mmap GPIO */
+    gpio_map = mmap(
+        NULL,                 //Any adddress in our space will do
+        BLOCK_SIZE,           //Map length
+        PROT_READ|PROT_WRITE, // Enable reading & writing to mapped memory
+        MAP_SHARED,           //Shared with other processes
+        mem_fd,               //File to map
+        GPIO_BASE             //Offset to GPIO peripheral
+    );
+    
+    ::close(mem_fd); //No need to keep mem_fd open after mmap
+    
+    if (gpio_map == MAP_FAILED) {
+        EXCEPTION("mmap error"); //errno also set!
+    }
+    
+    // Always use volatile pointer!
+    gpio = (volatile unsigned *)gpio_map;
+
+    INP_GPIO(this->m_wr_pin);
+    OUT_GPIO(this->m_wr_pin);
+
+    INP_GPIO(this->m_rdy_pin);
+    // Enable pulldown on Ready pin:
+    GPIO_PULL = 1;
+    delayMicrosecondsHard(5);
+    GPIO_PULLCLK0 = 1 << this->m_rdy_pin;
+    delayMicrosecondsHard(5);
+    GPIO_PULL = 0;
+    GPIO_PULLCLK0 = 0;
+
+}
+
+/**
+ * Opens a SPI peripheral using the bcm2835 direct access library.
+ * Use "/dev/spidev0.0" for SPI0 and CS0, and anything else for CS1. It does not
+ * really use /dev/spidev but we keep the syntax for compatibility.
+ */
+void SPIDriver::open_bcm2835(const Napi::CallbackInfo& info, const char * device) {
+    if (!bcm2835_init())
+        EXCEPTION("bcm2835_init failed. Are you running as root?");
+
+    if (!bcm2835_spi_begin())
+        EXCEPTION("bcm2836_spi_begin failed.");
+
+    // Configure the SPI bus (SPI0 only for now) using our settings.
+    // AFAIK there's no direct mapping between Linux SPIDEV defines
+    // which are used for our settings, and the bcm2835 library, so we
+    // are doing dumb mappings here:
+    if (this->m_mode & SPI_LSB_FIRST) {
+        bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_LSBFIRST);
+    } else {
+        bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
+    }
+
+    switch (this->m_mode & 0x03) {
+        case SPI_MODE_0:
+            bcm2835_spi_setDataMode(BCM2835_SPI_MODE0);
+        break;
+        case SPI_MODE_1:
+            bcm2835_spi_setDataMode(BCM2835_SPI_MODE1);
+        break;
+        case SPI_MODE_2:
+            bcm2835_spi_setDataMode(BCM2835_SPI_MODE2);
+        break;
+        case SPI_MODE_3:
+            bcm2835_spi_setDataMode(BCM2835_SPI_MODE3);
+        break;
+
+    }
+
+    bcm2835_spi_set_speed_hz(this->m_max_speed);
+    if (! strcmp(device, "/dev/spidev0.0")) {
+        bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
+        bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
+        this->m_fd = 0; // We use m_fd to remember what CS line is used
+    } else {
+        bcm2835_spi_chipSelect(BCM2835_SPI_CS1);
+        bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS1, LOW);
+        this->m_fd = 1;
+    }
+
+    // Now setup the GPIOs that are specific to the Noritake screens
+
+    if (this->m_wr_pin)
+        bcm2835_gpio_fsel(this->m_wr_pin, BCM2835_GPIO_FSEL_OUTP);
+
+    if (this->m_rdy_pin) {
+        bcm2835_gpio_fsel(this->m_rdy_pin, BCM2835_GPIO_FSEL_INPT);
+        bcm2835_gpio_set_pud(this->m_rdy_pin, BCM2835_GPIO_PUD_UP);
+    }
+
+
+}
+
+/**
+ * The core of SPI transfers - spidev version
+ */
+void SPIDriver::spidev_transfer(
                 const Napi::CallbackInfo& info,
-                unsigned char *write,
-                unsigned char *read,
+                unsigned char *tx_buf,
+                unsigned char *rx_buf,
                 size_t length,
                 uint32_t speed,
                 uint16_t delay,
                 uint8_t bits,
                 bool dma ) {
-
-    struct spi_ioc_transfer data = {
-	    (unsigned long)write,
-        (unsigned long)read,
-        1,
-        speed,
-        delay,
-        bits,
-        0,   // cs_change
-        0,   // tx_nbits
-        0,   // rx_nbits
-        0    // pad
-    };
 
     int ret =0;
     GPIO_SET = 1 << this->m_wr_pin;
@@ -273,10 +352,16 @@ void SPIDriver::full_duplex_transfer(
 
     // Now send byte by byte for the whole buffer
     while (length--) {
-        ret = ioctl(this->m_fd, SPI_IOC_MESSAGE(1), &data);
-
+        // struct timeval tNow,tEnd ;
+        // gettimeofday (&tNow, NULL);
         if (this->m_wr_pin) {
             GPIO_CLR = 1 << this->m_wr_pin;
+        }
+        ret = write(this->m_fd, tx_buf++, 1);
+        // gettimeofday (&tEnd, NULL);
+        // printf("Took %lu\n", tEnd.tv_usec-tNow.tv_usec);
+
+        if (this->m_wr_pin) {
             GPIO_SET = 1 << this->m_wr_pin;
         }
 
@@ -293,8 +378,77 @@ void SPIDriver::full_duplex_transfer(
             while(!GET_GPIO(this->m_rdy_pin)){};
         }
     
-        data.tx_buf++;
-   }
+        //data.tx_buf++;
+    }
+
+  if (ret == -1) {
+    EXCEPTION("Unable to send SPI message");
+  }
+
+}
+
+/**
+ * The core of SPI transfers - BCM2835 version
+ */
+void SPIDriver::bcm2835_transfer(
+                const Napi::CallbackInfo& info,
+                unsigned char *tx_buf,
+                unsigned char *rx_buf,
+                size_t length,
+                uint32_t speed,
+                uint16_t delay,
+                uint8_t bits,
+                bool dma ) {
+
+    int ret =0;
+
+    // Since we can have multiple instances of SPI, we have to reset
+    // the peripheral before each transfer since they can all have different
+    // speed values and CS line selection
+    bcm2835_spi_set_speed_hz(speed);
+    if (this->m_fd) {
+        bcm2835_spi_chipSelect(BCM2835_SPI_CS1);
+    } else {
+        bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
+    }
+
+    if (this->m_wr_pin)
+        bcm2835_gpio_write(this->m_wr_pin,HIGH);
+
+    // Don't write anything if the peripheral is not ready
+    if (this->m_invert_rdy) {
+        while(bcm2835_gpio_lev(this->m_rdy_pin)) {};
+    } else {
+        while(! bcm2835_gpio_lev(this->m_rdy_pin)) {};
+    }
+
+    // Now send byte by byte for the whole buffer and check
+    // the busy/ready signal at each byte if necessary, and also
+    // toggle the !WRITE signal if necessary
+    while (length--) {
+        if (this->m_wr_pin) {
+            bcm2835_gpio_clr(this->m_wr_pin);
+        }
+        ret = bcm2835_spi_transfer(*tx_buf);
+        tx_buf++;
+
+        if (this->m_wr_pin) {
+            bcm2835_gpio_set(this->m_wr_pin);
+        }
+
+        if (this->m_invert_rdy) {
+            //For Series 7000 displays, the busy pin (spec says 20us max!)
+            // can take a while to go up, so we have to add this delay. 10us
+            // works well in practice.
+            delayMicrosecondsHard(10); 
+            while(bcm2835_gpio_lev(this->m_rdy_pin)) {};
+        } else if (! dma ) {
+            // The RDY line can take up to 500ns to do down,
+            // so we need to wait before reading it:
+            delayMicrosecondsHard(1); 
+            while(!bcm2835_gpio_lev(this->m_rdy_pin)) {};
+        }
+    }
 
   if (ret == -1) {
     EXCEPTION("Unable to send SPI message");
@@ -316,7 +470,7 @@ Napi::Value SPIDriver::mode(const Napi::CallbackInfo& info) {
 		return info.This();
 	}
 	else {
-		return Napi::Number::New(info.Env(), this->m_mode);
+		return Napi::Number::New(info.Env(), this->m_mode & 0x03);
 	}
 }
 
@@ -440,7 +594,7 @@ Napi::Value SPIDriver::bSeries(const Napi::CallbackInfo& info) {
     }
 }
 
-Napi::Value SPIDriver::delay(const Napi::CallbackInfo& info) {
+Napi::Value SPIDriver::spiDelay(const Napi::CallbackInfo& info) {
     if (info.Length() > 0 && info[0].IsNumber()) {
         uint16_t in_value = info[0].As<Napi::Number>().DoubleValue();
         ASSERT_NOT_OPEN;
@@ -500,5 +654,23 @@ Napi::Value SPIDriver::halfDuplex(const Napi::CallbackInfo& info) {
         return info.This();
     } else {
         return Napi::Boolean::New(info.Env(), (this->m_mode & SPI_3WIRE) > 0);
+    }
+}
+
+/**
+ * driver picks whether we want spidev or low level bcm2835 support
+ */
+Napi::Value SPIDriver::driver(const Napi::CallbackInfo& info) {
+    if (info.Length() > 0 && info[0].IsNumber()) {
+        uint32_t in_value = info[0].As<Napi::Number>().Uint32Value();
+        ASSERT_NOT_OPEN;
+        if (in_value == DRIVER_SPIDEV) {
+            this->m_driver = DRIVER_SPIDEV;
+        } else {
+            this->m_driver = DRIVER_BCM2835;
+        }
+        return info.This();
+    } else {
+        return Napi::Number::New(info.Env(), this->m_driver);
     }
 }
