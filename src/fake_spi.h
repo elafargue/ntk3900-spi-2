@@ -40,3 +40,35 @@ struct spi_ioc_transfer {
 
  #define SPI_IOC_MESSAGE(x) 0
  #define ioctl(x, y, z) -1
+
+// Stub BCM2835 constants
+#define BCM2835_SPI_BIT_ORDER_LSBFIRST 0
+#define BCM2835_SPI_BIT_ORDER_MSBFIRST 1
+#define BCM2835_SPI_MODE0 0
+#define BCM2835_SPI_MODE1 1
+#define BCM2835_SPI_MODE2 2
+#define BCM2835_SPI_MODE3 3
+#define BCM2835_SPI_CS0 0
+#define BCM2835_SPI_CS1 1
+#define BCM2835_GPIO_FSEL_OUTP 1
+#define BCM2835_GPIO_FSEL_INPT 0
+#define BCM2835_GPIO_PUD_UP 1
+#define LOW 0
+
+#define HIGH 1
+static inline void bcm2835_gpio_write(int pin, int value) { (void)pin; (void)value; }
+static inline int bcm2835_gpio_lev(int pin) { (void)pin; return 0; }
+static inline void bcm2835_gpio_clr(int pin) { (void)pin; }
+static inline void bcm2835_gpio_set(int pin) { (void)pin; }
+static inline unsigned char bcm2835_spi_transfer(unsigned char value) { (void)value; return 0; }
+
+// Stub BCM2835 functions
+static inline int bcm2835_init() { return 1; }
+static inline int bcm2835_spi_begin() { return 1; }
+static inline void bcm2835_spi_setBitOrder(int order) { (void)order; }
+static inline void bcm2835_spi_setDataMode(int mode) { (void)mode; }
+static inline void bcm2835_spi_set_speed_hz(unsigned int hz) { (void)hz; }
+static inline void bcm2835_spi_chipSelect(int cs) { (void)cs; }
+static inline void bcm2835_spi_setChipSelectPolarity(int cs, int active) { (void)cs; (void)active; }
+static inline void bcm2835_gpio_fsel(int pin, int mode) { (void)pin; (void)mode; }
+static inline void bcm2835_gpio_set_pud(int pin, int pud) { (void)pin; (void)pud; }
